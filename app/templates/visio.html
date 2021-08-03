@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}My Little Visio{% endblock %}
+{% block head %}
+    {{ super() }}
+    <script src="{{ config['VUE_URL'] }}"></script>
+    <script src="{{ url_for('static', filename='visio.js') }}"></script>
+{% endblock %}
+{% block content %}
+    {{ super() }}
+    <div id="container">
+        <div id="views">
+            <video id="local_view" autoplay muted></video>
+        </div>
+    </div>
+{% endblock %}
+

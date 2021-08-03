@@ -1,0 +1,3 @@
+# Activate debugging
+DEBUG = True
+
