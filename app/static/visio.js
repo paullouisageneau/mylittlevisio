@@ -275,6 +275,12 @@ class Session {
     }
 }
 
+function webSocketUrl(path) {
+    const url = new URL(path, window.location.href);
+    url.protocol = url.protocol.replace('http', 'ws');
+    return url.href;
+}
+
 async function initSession() {
     try {
         const roomId = window.location.hash ? window.location.hash.substring(1) : randomId(6);
@@ -297,7 +303,7 @@ async function initSession() {
           }],
         };
 
-        const session = new Session(`ws://localhost:8080/room/${roomId}`, config);
+        const session = new Session(webSocketUrl(`room/${roomId}`), config);
 
         session.onremotestream = (evt) => {
             const remoteViewId = `remote_view_${evt.id}`;
