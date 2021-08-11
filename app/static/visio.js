@@ -188,11 +188,10 @@ class Connection {
 }
 
 class Session {
-    constructor(url, config) {
+    constructor(config) {
         this.config = config || {};
         this.conns = {};
         this.sig = new Signaling(this.onSignaling);
-        this.sig.connect(url);
         this._defferedId = new Deferred();
     }
 
@@ -239,6 +238,10 @@ class Session {
         const conn = await this.createConnection(id);
         conn.setLocalStream(await this.localStream());
         await conn.offer();
+    }
+
+    async connectSignaling(url) {
+        this.sig.connect(url);
     }
 
     onSignaling = async (message) => {
@@ -303,7 +306,10 @@ async function initSession() {
           }],
         };
 
-        const session = new Session(webSocketUrl(`room/${roomId}`), config);
+        const session = new Session(config);
+
+        const localStream = await session.localStream();
+        localView.srcObject = localStream;
 
         session.onremotestream = (evt) => {
             const remoteViewId = `remote_view_${evt.id}`;
@@ -323,9 +329,7 @@ async function initSession() {
             }
         };
 
-        const localId = await session.localId();
-        const localStream = await session.localStream();
-        localView.srcObject = localStream;
+	session.connectSignaling(webSocketUrl(`room/${roomId}`));
     }
     catch(e) {
         console.error(e);
