@@ -286,6 +286,9 @@ function webSocketUrl(path) {
 
 async function initSession() {
     try {
+        if(!window.RTCPeerConnection)
+            throw Error("This browser does not support WebRTC");
+
         const roomId = window.location.hash ? window.location.hash.substring(1) : randomId(6);
         window.location.hash = '#' + roomId;
 
