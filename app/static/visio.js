@@ -347,7 +347,18 @@ function addRemoteView(id, stream = null) {
 
     if(stream) {
         view.srcObject = stream;
-        view.play();
+        function tryPlay() {
+            view.muted = false;
+            view.play().catch(err => {
+                if (err.name == 'NotAllowedError') {
+                    view.muted = true;
+                    view.play().catch((err) => console.error(err));
+                    setTimeout(tryPlay, 1000);
+                }
+                else console.error(err);
+            });
+        }
+        tryPlay();
     }
 }
 
