@@ -401,6 +401,7 @@ async function start() {
         const localStream = await session.localStream();
         const localView = document.getElementById('view-local');
         localView.srcObject = localStream;
+        localView.muted = true;
         localView.play();
     }
     catch(err) {
