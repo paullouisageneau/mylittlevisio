@@ -377,6 +377,8 @@ async function start() {
         const roomId = window.location.hash ? window.location.hash.substring(1) : randomId(6);
         window.location.hash = '#' + roomId;
 
+        window.addEventListener('hashchange', () => window.location.reload());
+
         const config = {
             rtcpMuxPolicy: 'require',
             bundlePolicy: 'max-bundle',
