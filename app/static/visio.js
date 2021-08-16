@@ -1,3 +1,4 @@
+const MyLittleVisio = (function() {
 
 class Deferred {
     constructor() {
@@ -10,18 +11,18 @@ class Deferred {
 
 class Message {
     constructor(id, type, params, body) {
-        this.id = id || "unknown";
-        this.type = type || "unknown";
+        this.id = id || 'unknown';
+        this.type = type || 'unknown';
         this.params = params || [];
-        this.body = body || "";
+        this.body = body || '';
     }
 
     static deserialize(str) {
-        const lines = str.split("\n");
+        const lines = str.split('\n');
         const header = lines.shift();
-        const body = lines.join("\n");
+        const body = lines.join('\n');
 
-        const params = header.split(" ");
+        const params = header.split(' ');
         const id = params.shift();
         const type = params.shift();
 
@@ -29,8 +30,8 @@ class Message {
     }
 
     serialize() {
-        const header = [this.id, this.type].concat(this.params).join(" ");
-        return header + "\n" + (this.body || "");
+        const header = [this.id, this.type].concat(this.params).join(' ');
+        return header + '\n' + (this.body || '');
     }
 }
 
@@ -47,7 +48,7 @@ class Signaling {
         ws.onopen = this.onOpen;
         ws.onclose = this.onClose;
         ws.onmessage = this.onMessage;
-        ws.onerror = () => console.error("Signaling error");
+        ws.onerror = () => console.error('Signaling error');
         this.ws = ws;
         this.url = url;
     }
@@ -60,7 +61,6 @@ class Signaling {
 
     send(message) {
         const data = message.serialize();
-        //console.log("<<", data);
         if(this.ws) this.ws.send(data)
         else this.queue.push(data);
     }
@@ -70,7 +70,7 @@ class Signaling {
     }
 
     onOpen = () => {
-        console.log("Signaling open");
+        console.log('Signaling open');
         for(const data of this.queue)
             this.ws.send(data);
 
@@ -79,7 +79,7 @@ class Signaling {
     }
 
     onClose = () => {
-        console.log("Signaling closed");
+        console.log('Signaling closed');
         setTimeout(this.onRetry, this.timeout * Math.random());
         this.timeout*= 2;
         this.ws = undefined;
@@ -90,10 +90,9 @@ class Signaling {
     }
 
     onMessage = (ev) => {
-        if(typeof(ev.data) == "string") {
-            //console.log(">>", ev.data);
+        if(typeof(ev.data) == 'string') {
             const message = Message.deserialize(ev.data);
-            if(message.type == "leave") {
+            if(message.type == 'leave') {
                 this.defaultCallback(message);
             } else {
                 const cb = this.callbacks[message.id] || this.defaultCallback;
@@ -104,16 +103,22 @@ class Signaling {
 }
 
 class Connection {
-    constructor(id, config, sig) {
+    constructor(id, config, sig, polite) {
         sig.recv(id, this.onSignaling);
         this.id = id;
         this.sig = sig;
+        this.polite = polite;
 
         const pc = new RTCPeerConnection(config);
+        pc.onnegotiationneeded = this.onNegotiationNeeded;
         pc.onicecandidate = this.onCandidate;
         pc.oniceconnectionstatechange = this.onStateChange;
         pc.ontrack = this.onTrack;
         this.pc = pc;
+
+        self.isMakingOffer = false;
+        self.isIgnoringOffer = false;
+        self.isSettingRemoteAnswer = false;
 
         this._defferedStream = new Deferred();
     }
@@ -122,62 +127,103 @@ class Connection {
         this.pc.close();
     }
 
-    async offer() {
-        await this.setLocalDescription(await this.pc.createOffer());
-    }
-
-    async answer() {
-        await this.setLocalDescription(await this.pc.createAnswer());
-    }
-
     remoteStream() {
         return this._defferedStream.promise;
     }
 
-    async setLocalStream(stream) {
+    setLocalStream(stream) {
         for(const track of stream.getTracks())
             this.pc.addTrack(track, stream);
     }
 
-    async setRemoteDescription(description) {
-        await this.pc.setRemoteDescription(description);
+    signalLocalDescription() {
+        const { type, sdp } = this.pc.localDescription;
+        this.sig.send(new Message(this.id, 'description', [type], sdp));
     }
 
-    async setLocalDescription(description) {
-        await this.pc.setLocalDescription(description);
-        const { type, sdp } = description;
-        this.sig.send(new Message(this.id, type, [], sdp));
+    signalLocalCandidate({ sdpMid, candidate }) {
+        this.sig.send(new Message(this.id, 'candidate', [sdpMid], candidate));
+    }
+
+    async makeOffer() {
+        try {
+            this.isMakingOffer = true;
+            const offer = await this.pc.createOffer();
+            if (this.pc.signalingState != 'stable')
+                return;
+
+            await this.pc.setLocalDescription(offer);
+            this.signalLocalDescription();
+
+        } catch(err) {
+            console.error(`Failed to send offer: ${err}`);
+        } finally {
+            this.isMakingOffer = false;
+        }
     }
 
     onSignaling = async (message) => {
         switch(message.type) {
-            case "offer":
-                await this.setRemoteDescription({ type: "offer", sdp: message.body });
-                await answer();
+            case 'description':
+                const [type] = message.params;
+
+                const readyForOffer =
+                    !this.makingOffer &&
+                    (this.pc.signalingState == "stable" || this.isSettingRemoteAnswer);
+
+                const offerCollision = type == "offer" && !readyForOffer;
+
+                this.isIgnoringOffer = !this.polite && offerCollision;
+                if (this.isIgnoreOffer)
+                    return;
+
+                this.isSettingRemoteAnswer = type == "answer";
+                try {
+                    await this.pc.setRemoteDescription({ type, sdp: message.body });
+                } finally {
+                    this.isSettingRemoteAnswer = false;
+                }
+                if (type == 'offer') {
+                    await this.pc.setLocalDescription(await this.pc.createAnswer());
+                    this.signalLocalDescription();
+                }
                 break;
-            case "answer":
-                await this.setRemoteDescription({ type: "answer", sdp: message.body });
+
+            case 'candidate':
+                const [sdpMid] = message.params;
+
+                try {
+                    await this.pc.addIceCandidate({ sdpMid, candidate: message.body });
+                } catch(err) {
+                    if(!this.isIgnoringOffer)
+                        throw err;
+                }
                 break;
-            case "candidate":
-                const mid = message.params[0] || null;
-                await this.pc.addIceCandidate({ sdpMid: mid, candidate: message.body});
-                break;
+
             default:
                 console.error(`Unexpected signaling message of type \"${message.type}\"`);
                 break;
         }
     }
 
-    onCandidate = (ev) => {
-        if(ev.candidate) {
-            const { sdpMid, candidate } = ev.candidate;
-            this.sig.send(new Message(this.id, "candidate", [sdpMid], candidate));
-        }
+    onNegotiationNeeded = () => {
+        this.makeOffer();
     }
 
-    onStateChange = () => {
+    onCandidate = (ev) => {
+        if(ev.candidate)
+            this.signalLocalCandidate(ev.candidate);
+    }
+
+    onStateChange = async () => {
         console.log(`State change: ${this.pc.iceConnectionState}`);
-        // TODO: ICE restart on disconnected or failed
+        if (this.pc.iceConnectionState === "failed") {
+            if (this.pc.restartIce) {
+                this.pc.restartIce();
+            } else {
+                this.makeOffer();
+            }
+        }
     }
 
     onTrack = (ev) => {
@@ -193,6 +239,10 @@ class Session {
         this.conns = {};
         this.sig = new Signaling(this.onSignaling);
         this._defferedId = new Deferred();
+
+        this.onpeerjoin = () => {};
+        this.onpeerleave = () => {};
+        this.onremotestream = () => {};
     }
 
     localId() {
@@ -203,25 +253,34 @@ class Session {
         const constraints = {
             audio: true,
             video: {
-                facingMode: "user",
+                facingMode: 'user',
                 width: { min: 640, ideal: 1280, max: 1920 },
                 height: { min: 360, ideal: 720, max: 1080 },
             },
-            video: true,
         };
         return this._cachedUserMedia ||
             (this._cachedUserMedia = navigator.mediaDevices.getUserMedia(constraints));
     }
 
     remoteStream(id) {
-        const conn = this.conns[id] || this.connect(id);
-        return conn.remoteStream();
+        this.connection(id).remoteStream();
+    }
+
+    connection(id) {
+        return this.conns[id] || this.connect(id);
     }
 
     createConnection(id) {
-        const conn = new Connection(id, this.config, this.sig);
-        conn.remoteStream().then((stream) => (this.onremotestream||(()=>{}))({id, stream}));
+        const polite = !(id < this._localId);
+        const conn = new Connection(id, this.config, this.sig, polite);
+        this.localStream()
+            .then((stream) => conn.setLocalStream(stream))
+            .catch((err) => console.error(err));
+        conn.remoteStream()
+            .then((stream) => this.onremotestream({id, stream}))
+            .catch((err) => console.error(err));
         this.conns[id] = conn;
+        this.onpeerjoin({ id });
         return conn;
     }
 
@@ -230,46 +289,38 @@ class Session {
         if(conn) {
             conn.close();
             delete this.conns[id];
-            (this.onremotestream||(()=>{}))({id, stream: null});
+            this.onpeerleave({ id });
         }
     }
 
-    async connect(id) {
-        const conn = await this.createConnection(id);
-        conn.setLocalStream(await this.localStream());
-        await conn.offer();
-    }
-
-    async connectSignaling(url) {
+    connectSignaling(url) {
         this.sig.connect(url);
     }
 
     onSignaling = async (message) => {
         switch(message.type) {
-            case "register":
+            case 'register':
                 console.log(`Local id is ${message.id}`);
-                this._defferedId.resolve(message.id);
+                this._localId = message.id;
+                this._defferedId.resolve(this._localId);
                 break;
-            case "join":
+            case 'join':
                 console.log(`Got remote id ${message.id}`);
-                await this.connect(message.id);
+                this.createConnection(message.id);
                 break;
-            case "leave":
+            case 'leave':
                 this.deleteConnection(message.id);
                 break;
-            case "offer":
-                const conn = this.createConnection(message.id);
-                await conn.setRemoteDescription({ type: "offer", sdp: message.body });
-                await conn.setLocalStream(await this.localStream());
-                await conn.answer();
+            case 'description':
+                await this.createConnection(message.id).onSignaling(message);
                 break;
-            case "error":
+            case 'error':
                 const messages = {
-                    not_found: "Not found",
-                    not_connected: "Not connected",
+                    not_found: 'Not found',
+                    not_connected: 'Not connected',
                 };
                 const err = message.params[0];
-                console.error(`Error: ${messages[err] || "Unknown error"}`);
+                console.error(`Error: ${messages[err] || 'Unknown error'}`);
                 break;
             default:
                 console.error(`Unexpected signaling message of type \"${message.type}\"`);
@@ -284,61 +335,70 @@ function webSocketUrl(path) {
     return url.href;
 }
 
-async function initSession() {
+function addRemoteView(id, stream = null) {
+    const viewId = `view-remote-${id}`;
+    let view = document.getElementById(viewId);
+    if(!view) {
+        view = document.createElement('video');
+        view.id = viewId;
+        const views = document.getElementById('views');
+        views.insertBefore(view, views.firstChild);
+    }
+
+    if(stream) {
+        view.srcObject = stream;
+        view.play();
+    }
+}
+
+function removeRemoteView(id) {
+    const viewId = `view-remote-${id}`;
+    const view = document.getElementById(viewId);
+    if(view)
+        view.remove();
+}
+
+async function start() {
     try {
         if(!window.RTCPeerConnection)
-            throw Error("This browser does not support WebRTC");
+            throw Error('This browser does not support WebRTC');
 
         const roomId = window.location.hash ? window.location.hash.substring(1) : randomId(6);
         window.location.hash = '#' + roomId;
 
-        const localLink = document.getElementById("local_link");
-        const localView = document.getElementById("local_view");
-        const views = document.getElementById("views");
-
         const config = {
-          rtcpMuxPolicy: 'require',
-          bundlePolicy: 'max-bundle',
-          iceServers: [{
-                  urls: 'stun:stun.ageneau.net:3478',
-          },
-          {
-                  urls: 'turn:stun.ageneau.net:3478',
-                  username: 'mylittlevisio',
-                  credential: '67613740051432',
-          }],
+            rtcpMuxPolicy: 'require',
+            bundlePolicy: 'max-bundle',
+            iceServers: [{
+                urls: 'stun:stun.ageneau.net:3478',
+            },
+            {
+                urls: 'turn:stun.ageneau.net:3478',
+                username: 'mylittlevisio',
+                credential: '67613740051432',
+            }],
         };
 
         const session = new Session(config);
+        session.onpeerjoin = (evt) => addRemoteView(evt.id);
+        session.onpeerleave = (evt) => removeRemoteView(evt.id);
+        session.onremotestream = (evt) => addRemoteView(evt.id, evt.stream);
+        session.connectSignaling(webSocketUrl(`room/${roomId}`));
 
         const localStream = await session.localStream();
+        const localView = document.getElementById('view-local');
         localView.srcObject = localStream;
-
-        session.onremotestream = (evt) => {
-            const remoteViewId = `remote_view_${evt.id}`;
-            let remoteView = document.getElementById(remoteViewId);
-            if(evt.stream) {
-                console.log(`Got remote stream for ${evt.id}`);
-                if(!remoteView)
-                    remoteView = document.createElement('video');
-
-                remoteView.id = remoteViewId;
-                remoteView.srcObject = evt.stream;
-                remoteView.play();
-                views.insertBefore(remoteView, views.firstChild);
-            } else {
-                if(remoteView)
-                    remoteView.remove();
-            }
-        };
-
-	session.connectSignaling(webSocketUrl(`room/${roomId}`));
+        localView.play();
     }
-    catch(e) {
-        console.error(e);
-        alert(`Error: ${e}`);
+    catch(err) {
+        console.error(err);
+        alert(`Error: ${err.message}`);
     }
 }
 
-window.addEventListener('load', () => initSession());
+return {start};
+
+})();
+
+window.addEventListener('load', () => MyLittleVisio.start());
 
