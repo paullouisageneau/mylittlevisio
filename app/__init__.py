@@ -97,7 +97,3 @@ def room(room_id):
             del rooms[room_id]
 
     return ''
-
-
-# Import main to expose it outside
-from .__main__ import main
